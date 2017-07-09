@@ -62,14 +62,14 @@ import sys
 import xmlrpclib
 import yaml
 
-from github import Github, GithubObject, Issue
+from github import Github, GithubObject
 
 
 def convert_value_for_json(obj):
     """Converts all date-like objects into ISO 8601 formatted strings for JSON"""
 
     if hasattr(obj, 'timetuple'):
-        return datetime.fromtimestamp(mktime(obj.timetuple())).isoformat()
+        return datetime.fromtimestamp(mktime(obj.timetuple())).isoformat()+"Z"
     elif hasattr(obj, 'isoformat'):
         return obj.isoformat()
     else:
@@ -114,8 +114,8 @@ class Migrator():
             return urljoin(self.trac_public_url, '/ticket/%d' % trac_id)
 
     def fix_wiki_syntax(self, markup):
-        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
-                        markup)
+#        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
+#                        markup)
         markup = re.sub(r'#!CommitTicketReference.*rev=([^\s]+)\n', lambda i: i.group(1),
                         markup, flags=re.MULTILINE)
 
@@ -209,20 +209,23 @@ class Migrator():
                 post_parameters["issue"]["assignee"] = assignee._identity
         if milestone is not GithubObject.NotSet:
             post_parameters["issue"]["milestone"] = milestone._identity
+        post_parameters["issue"]["closed"] = attributes['status'] == "closed"
+        post_parameters["issue"]["created_at"] = convert_value_for_json(attributes['time'])
+        post_parameters["issue"]["updated_at"] = convert_value_for_json(attributes['changetime'])
 
         for time, values in sorted(comments.items()):
             if len(values) > 1:
                 fmt = "\n* %s" % "\n* ".join(values)
             else:
                 fmt = "".join(values)
-            post_parameters["comments"].append({"body": fmt, "created_at": convert_value_for_json(attributes["time"])+"Z"})
+            post_parameters["comments"].append({"body": fmt, "created_at": convert_value_for_json(attributes["time"])})
         headers, data = self.github_repo._requester.requestJsonAndCheck(
             "POST",
             self.github_repo.url + "/import/issues",
             input=post_parameters,
             headers={'Accept': 'application/vnd.github.golden-comet-preview+json'}
         )
-        return Issue.Issue(self.github_repo._requester, headers, data, completed=True)
+        return data["id"]
 
     def migrate_tickets(self):
         print("Loading information from Trac…", file=sys.stderr)
@@ -274,11 +277,12 @@ class Migrator():
                     gh_issue = self.import_issue(title, assignee, body,
                                                  milestone, labels,
                                                  attributes, self.get_trac_comments(trac_id))
+                    print ("\tInitiated issue: %s (%s)" % (title, gh_issue), file=sys.stderr)
                 else:
                     gh_issue = self.github_repo.create_issue(title, assignee=assignee, body=body,
                                                              milestone=milestone, labels=ghlabels)
+                    print ("\tCreated issue: %s (%s)" % (title, gh_issue.html_url), file=sys.stderr)
                 self.gh_issues[title] = gh_issue
-                print ("\tCreated issue: %s (%s)" % (title, gh_issue.html_url), file=sys.stderr)
 
             trac_issue_map[int(trac_id)] = gh_issue
 
@@ -287,7 +291,10 @@ class Migrator():
         incomplete_label = self.get_gh_label('Incomplete Migration')
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            gh_issue = trac_issue_map[int(trac_id)]
+            if self.use_import_api:
+                gh_issue = self.github_repo.get_issue(trac_issue_map[int(trac_id)])
+            else:
+                gh_issue = trac_issue_map[int(trac_id)]
 
             if incomplete_label.url not in [i.url for i in gh_issue.labels]:
                 continue
@@ -303,11 +310,10 @@ class Migrator():
                         fmt = "\n* %s" % "\n* ".join(values)
                     else:
                         fmt = "".join(values)
-
                     gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
 
-            if attributes['status'] == "closed":
-                gh_issue.edit(state="closed")
+                if attributes['status'] == "closed":
+                    gh_issue.edit(state="closed")
 
 
 def check_simple_output(*args, **kwargs):
