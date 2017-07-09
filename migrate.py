@@ -60,8 +60,9 @@ import re
 import subprocess
 import sys
 import xmlrpclib
+import yaml
 
-from github import Github, GithubObject
+from github import Github, GithubObject, Issue
 
 
 def convert_value_for_json(obj):
@@ -90,8 +91,8 @@ def make_blockquote(text):
 
 
 class Migrator():
-    def __init__(self, trac_url=None, github_username=None, github_password=None, github_project=None,
-                 github_api_url=None, username_map=None):
+    def __init__(self, trac_url, github_username=None, github_password=None, github_project=None,
+                 github_api_url=None, username_map=None, config=None):
         trac_api_url = trac_url + "/login/rpc"
         print("TRAC api url: %s" % trac_api_url, file=sys.stderr)
         self.trac = xmlrpclib.ServerProxy(trac_api_url)
@@ -101,6 +102,9 @@ class Migrator():
         self.github_repo = self.github.get_repo(github_project)
 
         self.username_map = {i: gh.get_user(j) for i, j in username_map.items()}
+        self.label_map = config["labels"]
+        self.rev_map = {}
+        self.use_import_api = True
 
     def convert_ticket_id(self, trac_id):
         trac_id = int(trac_id)
@@ -161,6 +165,65 @@ class Migrator():
             warn("Cannot map Trac username >{0}< to GitHub user. Will add username >{0}< as label.".format(trac_username))
             return GithubObject.NotSet
 
+    def get_mapped_labels(self, attribute, value):
+        if value is None or value.strip() == "":
+            return []
+        if attribute in self.label_map:
+            result = self.label_map[attribute].get(value, [])
+            return result if isinstance(result, list) else [result]
+        else:
+            return [value]
+
+    def get_trac_comments(self, trac_id):
+        changelog = self.trac.ticket.changeLog(trac_id)
+        comments = {}
+        for time, author, field, old_value, new_value, permanent in changelog:
+            if field == 'comment':
+                if not new_value:
+                    continue
+                body = '%s commented:\n\n%s\n\n' % (author,
+                                                    make_blockquote(self.fix_wiki_syntax(new_value)))
+            else:
+                if "\n" in old_value or "\n" in new_value:
+                    body = '%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (author, field,
+                                                                           make_blockquote(old_value),
+                                                                           make_blockquote(new_value))
+                else:
+                    body = '%s changed %s from "%s" to "%s"' % (author, field, old_value, new_value)
+            comments.setdefault(time.value, []).append(body)
+        return comments
+
+    def import_issue(self, title, assignee, body, milestone, labels, attributes, comments):
+        post_parameters = {
+            "issue": {
+              "title": title,
+              "body": body,
+              "labels": labels
+            },
+            "comments": []
+        }
+        if assignee is not GithubObject.NotSet:
+            if isinstance(assignee, (str, unicode)):
+                post_parameters["issue"]["assignee"] = assignee
+            else:
+                post_parameters["issue"]["assignee"] = assignee._identity
+        if milestone is not GithubObject.NotSet:
+            post_parameters["issue"]["milestone"] = milestone._identity
+
+        for time, values in sorted(comments.items()):
+            if len(values) > 1:
+                fmt = "\n* %s" % "\n* ".join(values)
+            else:
+                fmt = "".join(values)
+            post_parameters["comments"].append({"body": fmt, "created_at": convert_value_for_json(attributes["time"])+"Z"})
+        headers, data = self.github_repo._requester.requestJsonAndCheck(
+            "POST",
+            self.github_repo.url + "/import/issues",
+            input=post_parameters,
+            headers={'Accept': 'application/vnd.github.golden-comet-preview+json'}
+        )
+        return Issue.Issue(self.github_repo._requester, headers, data, completed=True)
+
     def migrate_tickets(self):
         print("Loading information from Trac…", file=sys.stderr)
 
@@ -191,10 +254,11 @@ class Migrator():
 
             # User does not exist in GitHub -> Add username as label
             if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
-                    labels.extend([attributes['owner']])
+                labels.extend([attributes['owner']])
 
-            labels.extend(filter(None, (attributes['type'], attributes['component'])))
-            labels = map(self.get_gh_label, labels)
+            for attr in ('type', 'component', 'resolution'):
+                labels += self.get_mapped_labels(attr, attributes.get(attr))
+            ghlabels = map(self.get_gh_label, labels)
 
             for i, j in self.gh_issues.items():
                 if i == title:
@@ -205,8 +269,14 @@ class Migrator():
                         gh_issue.edit(assignee=assignee)
                     break
             else:
-                gh_issue = self.github_repo.create_issue(title, assignee=assignee, body=body,
-                                                         milestone=milestone, labels=labels)
+                if self.use_import_api:
+                    body = "%s\n\n%s" % (self.fix_wiki_syntax(attributes['description']), body)
+                    gh_issue = self.import_issue(title, assignee, body,
+                                                 milestone, labels,
+                                                 attributes, self.get_trac_comments(trac_id))
+                else:
+                    gh_issue = self.github_repo.create_issue(title, assignee=assignee, body=body,
+                                                             milestone=milestone, labels=ghlabels)
                 self.gh_issues[title] = gh_issue
                 print ("\tCreated issue: %s (%s)" % (title, gh_issue.html_url), file=sys.stderr)
 
@@ -226,35 +296,15 @@ class Migrator():
 
             print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url),file=sys.stderr)
 
-            gh_issue.edit(body="%s\n\n%s" % (self.fix_wiki_syntax(attributes['description']), gh_issue.body))
-
-            changelog = self.trac.ticket.changeLog(trac_id)
-
-            comments = {}
-
-            for time, author, field, old_value, new_value, permanent in changelog:
-                if field == 'comment':
-                    if not new_value:
-                        continue
-                    body = '%s commented:\n\n%s\n\n' % (author,
-                                                        make_blockquote(self.fix_wiki_syntax(new_value)))
-                else:
-                    if "\n" in old_value or "\n" in new_value:
-                        body = '%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (author, field,
-                                                                           make_blockquote(old_value),
-                                                                           make_blockquote(new_value))
+            if not self.use_import_api:
+                gh_issue.edit(body="%s\n\n%s" % (self.fix_wiki_syntax(attributes['description']), gh_issue.body))
+                for time, values in sorted(self.get_trac_comments(trac_id).items()):
+                    if len(values) > 1:
+                        fmt = "\n* %s" % "\n* ".join(values)
                     else:
-                        body = '%s changed %s from "%s" to "%s"' % (author, field, old_value, new_value)
+                        fmt = "".join(values)
 
-                comments.setdefault(time.value, []).append(body)
-
-            for time, values in sorted(comments.items()):
-                if len(values) > 1:
-                    fmt = "\n* %s" % "\n* ".join(values)
-                else:
-                    fmt = "".join(values)
-
-                gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
+                    gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
 
             if attributes['status'] == "closed":
                 gh_issue.edit(state="closed")
@@ -279,7 +329,7 @@ def get_github_credentials():
         except subprocess.CalledProcessError:
             pass
 
-        if github_password.startswith("!"):
+        if github_password is not None and github_password.startswith("!"):
             github_password = check_simple_output(github_password.lstrip('!'))
 
     return github_username, github_password
@@ -317,15 +367,27 @@ if __name__ == "__main__":
                         type=argparse.FileType('r'),
                         help="File containing tab-separated Trac:Github username mappings")
 
+    parser.add_argument('--trac-hub-config',
+                        type=argparse.FileType('r'),
+                        help="YAML configuration file in trac-hub style")
+
     args = parser.parse_args()
+
+    if args.trac_hub_config:
+        config = yaml.load(args.trac_hub_config)
+        if "github" in config:
+            if not args.github_project and "repo" in config["github"]:
+                args.github_project = config["github"]["repo"]
+            if not github_password and "token" in config["github"]:
+                github_password = config["github"]["token"]
+    else:
+        config = {}
 
     if not args.github_project:
         parser.error("Github Project must be specified")
-
-    trac_password = getpass("Trac password: ")
-
-    trac_url = args.trac_url.replace("USERNAME", args.trac_username).replace("PASSWORD", trac_password)
-
+    trac_url = args.trac_url.replace("USERNAME", args.trac_username)
+    if "PASSWORD" in trac_url:
+        trac_url = trac_url.replace("PASSWORD", getpass("Trac password: "))
     if not github_password:
         github_password = getpass("Github password: ")
 
@@ -338,13 +400,15 @@ if __name__ == "__main__":
         user_map = filter(None, (i.strip() for i in args.username_map.readlines()))
         user_map = [re.split("\s+", j, maxsplit=1) for j in user_map]
         user_map = dict(user_map)
+    elif "users" in config:
+        user_map = config["users"]
     else:
         user_map = {}
 
     try:
         m = Migrator(trac_url=trac_url, github_username=args.github_username, github_password=github_password,
                      github_api_url=args.github_api_url, github_project=args.github_project,
-                     username_map=user_map)
+                     username_map=user_map, config=config)
         m.run()
     except Exception as e:
         print("Exception: %s" % e, file=sys.stderr)
