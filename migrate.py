@@ -104,6 +104,10 @@ class Migrator():
         self.username_map = {i: gh.get_user(j) for i, j in username_map.items()}
         self.label_map = config["labels"]
         self.rev_map = {}
+        if "github" in config and "revisions" in config["github"]:
+            for l in open(config["github"]["revisions"]):
+                key, val = l.split()
+                self.rev_map[key] = val
         self.use_import_api = True
 
     def convert_ticket_id(self, trac_id):
@@ -113,20 +117,21 @@ class Migrator():
         else:
             return urljoin(self.trac_public_url, '/ticket/%d' % trac_id)
 
+    def convert_revision_id(self, rev_id):
+        if rev_id in self.rev_map:
+            return "[r%s now %s](../commit/%s)" % (rev_id, self.rev_map[rev_id][:7], self.rev_map[rev_id])
+        return "[%s](../commit/%s)" % (rev_id[:7], rev_id)
+
     def fix_wiki_syntax(self, markup):
 #        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
 #                        markup)
-        markup = re.sub(r'#!CommitTicketReference.*rev=([^\s]+)\n', lambda i: i.group(1),
-                        markup, flags=re.MULTILINE)
-
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
         markup = markup.replace("}}}", "```")
 
         markup = markup.replace("[[BR]]", "\n")
-
-        markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"]', r"changeset \1", markup)
-
+        markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"]', lambda i: self.convert_revision_id(i.group(1)), markup)
+        markup = re.sub(r'\[(\d+)\]', lambda i: self.convert_revision_id(i.group(1)), markup)
         return markup
 
     def get_gh_milestone(self, milestone):
@@ -190,15 +195,19 @@ class Migrator():
             if field == 'comment':
                 if not new_value:
                     continue
-                body = '%s commented:\n\n%s\n\n' % (author,
-                                                    make_blockquote(self.fix_wiki_syntax(new_value)))
+                if '#!CommitTicketReference' in new_value:
+                    lines = new_value.splitlines()
+                    body = '@%s committed %s\n%s' % (author, self.fix_wiki_syntax(lines[0][3:]), lines[3])
+                else:
+                    body = '@%s commented:\n\n%s\n\n' % (author,
+                                                         make_blockquote(self.fix_wiki_syntax(new_value)))
             else:
                 if "\n" in old_value or "\n" in new_value:
-                    body = '%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (author, field,
+                    body = '@%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (author, field,
                                                                            make_blockquote(old_value),
                                                                            make_blockquote(new_value))
                 else:
-                    body = '%s changed %s from "%s" to "%s"' % (author, field, old_value, new_value)
+                    body = '@%s changed %s from "%s" to "%s"' % (author, field, old_value, new_value)
             comments.setdefault(time.value, []).append(body)
         return comments
 
