@@ -132,16 +132,20 @@ class Migrator():
     def get_gh_milestone(self, milestone):
         if milestone:
             if milestone not in self.gh_milestones:
-                m = self.github_repo.create_milestone(milestone)
-                self.gh_milestones[m.title] = m
-
+                m = self.trac.ticket.milestone.get(milestone)
+                print("Adding milestone", m, file=sys.stderr)
+                desc = self.fix_wiki_syntax(m["description"])
+                due = datetime.fromtimestamp(mktime((m["due"]).timetuple()))
+                status = "closed" if m["completed"] else "open"
+                gh_m = self.github_repo.create_milestone(milestone, state=status, description=desc)#, due_on=due)
+                self.gh_milestones[gh_m.title] = gh_m
             return self.gh_milestones[milestone]
         else:
             return GithubObject.NotSet
 
-    def get_gh_label(self, label):
+    def get_gh_label(self, label, color='FFFFFF'):
         if label not in self.gh_labels:
-            self.gh_labels[label] = self.github_repo.create_label(label, color='FFFFFF')
+            self.gh_labels[label] = self.github_repo.create_label(label, color=color)
         return self.gh_labels[label]
 
     def run(self):
@@ -170,9 +174,14 @@ class Migrator():
             return []
         if attribute in self.label_map:
             result = self.label_map[attribute].get(value, [])
-            return result if isinstance(result, list) else [result]
+            if not isinstance(result, list):
+               result = [result]
         else:
-            return [value]
+            result = [value]
+        if "#color" in self.label_map[attribute]:
+            for l in result:
+                self.get_gh_label(l, self.label_map[attribute]["#color"])
+        return result
 
     def get_trac_comments(self, trac_id):
         changelog = self.trac.ticket.changeLog(trac_id)
@@ -259,7 +268,7 @@ class Migrator():
             if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
                 labels.extend([attributes['owner']])
 
-            for attr in ('type', 'component', 'resolution'):
+            for attr in ('type', 'component', 'resolution', 'priority'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
             ghlabels = map(self.get_gh_label, labels)
 
