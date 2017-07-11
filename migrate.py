@@ -119,7 +119,7 @@ class Migrator():
 
     def convert_revision_id(self, rev_id):
         if rev_id in self.rev_map:
-            return "[r%s now %s](../commit/%s)" % (rev_id, self.rev_map[rev_id][:7], self.rev_map[rev_id])
+            return "[%s](../commit/%s) (aka r%s)" % (self.rev_map[rev_id][:7], self.rev_map[rev_id], rev_id)
         return "[%s](../commit/%s)" % (rev_id[:7], rev_id)
 
     def fix_wiki_syntax(self, markup):
@@ -128,8 +128,11 @@ class Migrator():
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
         markup = markup.replace("}}}", "```")
-
         markup = markup.replace("[[BR]]", "\n")
+
+        markup = re.sub(r'^ [-\*] ', '* ', markup)
+        markup = re.sub(r'\n [-\*] ', '\n* ', markup)
+
         markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"]', lambda i: self.convert_revision_id(i.group(1)), markup)
         markup = re.sub(r'\[(\d+)\]', lambda i: self.convert_revision_id(i.group(1)), markup)
         return markup
@@ -255,6 +258,7 @@ class Migrator():
 
         # Take the memory hit so we can rewrite ticket references:
         all_trac_tickets = list(get_all_tickets())
+        all_trac_tickets.sort(key=lambda t: int(t[0]))
         self.trac_issue_map = trac_issue_map = {}
 
         print ("Creating GitHub tickets…", file=sys.stderr)
@@ -271,7 +275,7 @@ class Migrator():
 
             assignee = self.get_github_username(attributes['owner'])
 
-            labels = ['Migrated from Trac', 'Incomplete Migration']
+            labels = ['Incomplete Migration']
 
             # User does not exist in GitHub -> Add username as label
             if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
