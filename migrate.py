@@ -263,7 +263,7 @@ class Migrator():
 
         print ("Creating GitHub tickets…", file=sys.stderr)
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            title = "%s (Trac #%d)" % (attributes['summary'], trac_id)
+            title = attributes['summary']
 
             # Intentionally do not migrate description at this point so we can rewrite
             # ticket ID references after all tickets have been created in the second pass below:
@@ -275,13 +275,12 @@ class Migrator():
 
             assignee = self.get_github_username(attributes['owner'])
 
-            labels = ['Incomplete Migration']
-
+            labels = []
             # User does not exist in GitHub -> Add username as label
             if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
-                labels.extend([attributes['owner']])
+                labels = [attributes['owner']]
 
-            for attr in ('type', 'component', 'resolution', 'priority'):
+            for attr in ('type', 'component', 'resolution', 'priority', 'keywords'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
             ghlabels = map(self.get_gh_label, labels)
 
