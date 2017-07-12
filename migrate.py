@@ -110,21 +110,12 @@ class Migrator():
                 self.rev_map[key] = val
         self.use_import_api = True
 
-    def convert_ticket_id(self, trac_id):
-        trac_id = int(trac_id)
-        if trac_id in self.trac_issue_map:
-            return "#%s" % self.trac_issue_map[trac_id].number
-        else:
-            return urljoin(self.trac_public_url, '/ticket/%d' % trac_id)
-
     def convert_revision_id(self, rev_id):
         if rev_id in self.rev_map:
             return "[%s](../commit/%s) (aka r%s)" % (self.rev_map[rev_id][:7], self.rev_map[rev_id], rev_id)
         return "[%s](../commit/%s)" % (rev_id[:7], rev_id)
 
     def fix_wiki_syntax(self, markup):
-#        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
-#                        markup)
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
         markup = markup.replace("}}}", "```")
@@ -151,10 +142,10 @@ class Migrator():
         else:
             return GithubObject.NotSet
 
-    def get_gh_label(self, label, color='FFFFFF'):
-        if label not in self.gh_labels:
-            self.gh_labels[label] = self.github_repo.create_label(label, color=color)
-        return self.gh_labels[label]
+    def get_gh_label(self, label, color):
+        if label.lower() not in self.gh_labels:
+            self.gh_labels[label.lower()] = self.github_repo.create_label(label, color=color)
+        return self.gh_labels[label.lower()]
 
     def run(self):
         self.load_github()
@@ -166,7 +157,7 @@ class Migrator():
         repo = self.github_repo
         self.gh_milestones = {i.title: i for i in chain(repo.get_milestones(),
                                                         repo.get_milestones(state="closed"))}
-        self.gh_labels = {i.name: i for i in repo.get_labels()}
+        self.gh_labels = {i.name.lower(): i for i in repo.get_labels()}
         self.gh_issues = {i.title: i for i in chain(repo.get_issues(state="open"),
                                                     repo.get_issues(state="closed"))}
 
@@ -180,16 +171,22 @@ class Migrator():
     def get_mapped_labels(self, attribute, value):
         if value is None or value.strip() == "":
             return []
+        color = 'FFFFFF'
         if attribute in self.label_map:
+            color = self.label_map[attribute].get("#color", color)
             result = self.label_map[attribute].get(value, [])
             if not isinstance(result, list):
-               result = [result]
+               result = result.split(", ")
         else:
             result = [value]
-        if "#color" in self.label_map[attribute]:
-            for l in result:
-                self.get_gh_label(l, self.label_map[attribute]["#color"])
-        return result
+        r = []
+        for l in result:
+            if "," in l or " " in l:
+                warn("Skipping invalid label value '%s' for attribute '%s'." % (l, attribute))
+            else:
+                self.get_gh_label(l, color)
+                r.append(l)
+        return r
 
     def get_trac_comments(self, trac_id):
         changelog = self.trac.ticket.changeLog(trac_id)
@@ -259,30 +256,26 @@ class Migrator():
         # Take the memory hit so we can rewrite ticket references:
         all_trac_tickets = list(get_all_tickets())
         all_trac_tickets.sort(key=lambda t: int(t[0]))
-        self.trac_issue_map = trac_issue_map = {}
 
         print ("Creating GitHub tickets…", file=sys.stderr)
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
             title = attributes['summary']
 
-            # Intentionally do not migrate description at this point so we can rewrite
-            # ticket ID references after all tickets have been created in the second pass below:
-            body = "Migrated from %s\n" % urljoin(self.trac_public_url, "/ticket/%d" % trac_id)
+            body = self.fix_wiki_syntax(attributes['description'])
+            body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "/ticket/%d" % trac_id)
             text_attributes = {k: convert_value_for_json(v) for k, v in attributes.items()}
             body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
 
             milestone = self.get_gh_milestone(attributes['milestone'])
-
             assignee = self.get_github_username(attributes['owner'])
 
             labels = []
             # User does not exist in GitHub -> Add username as label
             if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
-                labels = [attributes['owner']]
+                labels = self.get_mapped_labels('owner', attributes['owner'])
 
             for attr in ('type', 'component', 'resolution', 'priority', 'keywords'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
-            ghlabels = map(self.get_gh_label, labels)
 
             for i, j in self.gh_issues.items():
                 if i == title:
@@ -293,48 +286,17 @@ class Migrator():
                         gh_issue.edit(assignee=assignee)
                     break
             else:
-                if self.use_import_api:
-                    body = "%s\n\n%s" % (self.fix_wiki_syntax(attributes['description']), body)
-                    gh_issue = self.import_issue(title, assignee, body,
-                                                 milestone, labels,
-                                                 attributes, self.get_trac_comments(trac_id))
-                    print ("\tInitiated issue: %s (%s)" % (title, gh_issue), file=sys.stderr)
-                else:
-                    gh_issue = self.github_repo.create_issue(title, assignee=assignee, body=body,
-                                                             milestone=milestone, labels=ghlabels)
-                    print ("\tCreated issue: %s (%s)" % (title, gh_issue.html_url), file=sys.stderr)
+                gh_issue = self.import_issue(title, assignee, body,
+                                             milestone, labels,
+                                             attributes, self.get_trac_comments(trac_id))
+                print ("\tInitiated issue: %s (%s)" % (title, gh_issue), file=sys.stderr)
                 self.gh_issues[title] = gh_issue
 
-            trac_issue_map[int(trac_id)] = gh_issue
-
-        print("Migrating descriptions and comments…", file=sys.stderr)
-
-        incomplete_label = self.get_gh_label('Incomplete Migration')
+        print("Checking completion…", file=sys.stderr)
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            if self.use_import_api:
-                gh_issue = self.github_repo.get_issue(trac_issue_map[int(trac_id)])
-            else:
-                gh_issue = trac_issue_map[int(trac_id)]
-
-            if incomplete_label.url not in [i.url for i in gh_issue.labels]:
-                continue
-
-            gh_issue.remove_from_labels(incomplete_label)
-
-            print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url),file=sys.stderr)
-
-            if not self.use_import_api:
-                gh_issue.edit(body="%s\n\n%s" % (self.fix_wiki_syntax(attributes['description']), gh_issue.body))
-                for time, values in sorted(self.get_trac_comments(trac_id).items()):
-                    if len(values) > 1:
-                        fmt = "\n* %s" % "\n* ".join(values)
-                    else:
-                        fmt = "".join(values)
-                    gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
-
-                if attributes['status'] == "closed":
-                    gh_issue.edit(state="closed")
+            gh_issue = self.github_repo.get_issue(trac_id)
+            print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url), file=sys.stderr)
 
 
 def check_simple_output(*args, **kwargs):
