@@ -178,7 +178,7 @@ class Migrator():
             if not isinstance(result, list):
                result = result.split(", ")
         else:
-            result = [value]
+            result = value.split(", ")
         r = []
         for l in result:
             if "," in l or " " in l:
@@ -259,7 +259,7 @@ class Migrator():
 
         print ("Creating GitHub tickets…", file=sys.stderr)
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            title = attributes['summary']
+            title = "%s (Trac #%d)" % (attributes['summary'], trac_id)
 
             body = self.fix_wiki_syntax(attributes['description'])
             body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "/ticket/%d" % trac_id)
