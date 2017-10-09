@@ -1,0 +1,13 @@
+* check assignees
+* link comment authors to github accounts
+
+* fix pygithub bug with due_on date format
+* make PR for import API for pygithub
+
+document
+* enable XML RPC and permissions for trac
+* create user
+ * create token
+* create repo
+ * enable issues
+ * add contributors

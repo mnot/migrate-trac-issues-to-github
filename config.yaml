@@ -1,0 +1,68 @@
+trac:
+  # database: sqlite://db/trac.db
+  database: mysql2://behrisch@localhost/behrisch_trac
+github:
+  repo: 'sumotest2/sumo'
+  token: 'deadbeef'
+  revisions: revmap
+
+users:
+  behrisch_: behrisch
+  jakob.erdmann@dlr.de: namdre
+  palcraft: palcraft
+
+labels:
+  type:
+    '#color':           '0366d6'
+    enhancement:        enhancement
+    defect:             bug
+    meta:               meta
+
+  component:
+    '#color':                     '6f42c1'
+    TraCI:                        'c:traci'
+    Test system:                  'c:testsystem'
+    activitygen:                  'c:ACTIVITYGEN'
+    assignment:                   ['c:MAROUTER', 'c:ACTIVITYGEN']
+    build (make):                 'c:build'
+    build (msvc):                 'c:build'
+    contributed:                  'c:contributed'
+    documentation:                'c:doc'
+    dsp:                          'c:dsp'
+    external (FOX, xerces, GDAL, proj): 'c:extlibs'
+    game:                          'c:game'
+    microsim - car following:      ['c:SUMO', 'c:carfollow']
+    microsim - intermodal:         ['c:SUMO', 'c:intermodal']
+    microsim - junctions:          ['c:SUMO', 'c:junction']
+    microsim - lane change:        ['c:SUMO', 'c:lanechange']
+    net building (NETGEN, NETCONVERT): ['c:NETGEN', 'c:NETCONVERT']
+    netedit:                       'c:NETEDIT'
+    other (also unclassified):     'c:other'
+    routing (DFROUTER, JTRROUTER): ['c:DFROUTER', 'c:JTRROUTER']
+    routing (DUAROUTER):           'c:DUAROUTER'
+    scenarios:                     'c:scenarios'
+    sharps:                        'c:sharps'
+    simulation data input:         ['c:SUMO', 'c:input']
+    simulation data output:        ['c:SUMO', 'c:output']
+    simulation general (meso):     ['c:SUMO', 'c:meso']
+    simulation general (micro):    'c:SUMO'
+    simulation gui (GUISIM):       'c:SUMO-GUI'
+    tapasVEU:                      'c:tapasVEU'
+    tools (OD2TRIPS, POLYCONVERT): ['c:OD2TRIPS', 'c:POLYCONVERT']
+    tools (python):                'c:pytools'
+    urmo:                          'c:urmo'
+    voduges:                       'c:voduges'
+
+  resolution:
+    '#color':           '2cbe4e'
+    invalid:            'invalid'
+    duplicate:          'duplicate'
+    wontfix:            'wontfix'
+    worksforme:         'worksforme'
+
+  priority:
+    '#color':           'add8e6'
+    blocker:            'p:blocker'
+    critical:           'p:critical'
+    minor:              'p:minor'
+    trivial:            'p:trivial'
