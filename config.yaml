@@ -2,17 +2,25 @@ trac:
   # database: sqlite://db/trac.db
   database: mysql2://behrisch@localhost/behrisch_trac
 github:
-  repo: 'sumotest2/sumo'
+  repo: 'sumotest/sumo'
   token: 'deadbeef'
   revisions: revmap
 
 users:
-  behrisch_: behrisch
-  jakob.erdmann@dlr.de: namdre
+  behrisch: behrisch
   palcraft: palcraft
+  pablo: palcraft
   namdre: namdre
   laemmel: grgrlmml
   rhilbrich: roberthilbrich
+  hilb_ro: roberthilbrich
+  leo: leoluecken
+  luecken: leoluecken
+  dkrajzew: dkrajzew
+  bieker: lbieker
+  # wang
+  # mahei
+  # mknocke
 
 labels:
   type:

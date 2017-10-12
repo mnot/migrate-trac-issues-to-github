@@ -51,7 +51,6 @@ from __future__ import absolute_import, unicode_literals
 from itertools import chain
 from datetime import datetime
 from getpass import getpass, getuser
-from time import mktime
 from urlparse import urljoin, urlsplit, urlunsplit
 from warnings import warn
 import argparse
@@ -61,15 +60,21 @@ import subprocess
 import sys
 import xmlrpclib
 import yaml
+import ssl
+import time
 
-from github import Github, GithubObject
+from github import Github, GithubObject, UnknownObjectException
 
+# github sometimes hangs if we try to set the owner directly on import
+# currently we need to run this script twice to fix the owners
+# when setting the variable to true, no second run is needed
+ASSIGN_IMMEDIATELY = False
 
 def convert_value_for_json(obj):
     """Converts all date-like objects into ISO 8601 formatted strings for JSON"""
 
     if hasattr(obj, 'timetuple'):
-        return datetime.fromtimestamp(mktime(obj.timetuple())).isoformat()+"Z"
+        return datetime.fromtimestamp(time.mktime(obj.timetuple())).isoformat()+"Z"
     elif hasattr(obj, 'isoformat'):
         return obj.isoformat()
     else:
@@ -134,7 +139,7 @@ class Migrator():
                 m = self.trac.ticket.milestone.get(milestone)
                 print("Adding milestone", m, file=sys.stderr)
                 desc = self.fix_wiki_syntax(m["description"])
-                due = datetime.fromtimestamp(mktime((m["due"]).timetuple()))
+                due = datetime.fromtimestamp(time.mktime((m["due"]).timetuple()))
                 status = "closed" if m["completed"] else "open"
                 gh_m = self.github_repo.create_milestone(milestone, state=status, description=desc)#, due_on=due)
                 self.gh_milestones[gh_m.title] = gh_m
@@ -192,6 +197,7 @@ class Migrator():
         changelog = self.trac.ticket.changeLog(trac_id)
         comments = {}
         for time, author, field, old_value, new_value, permanent in changelog:
+            author = self.username_map.get(author, author)
             if field == 'comment':
                 if not new_value:
                     continue
@@ -220,7 +226,7 @@ class Migrator():
             },
             "comments": []
         }
-        if assignee is not GithubObject.NotSet:
+        if assignee is not GithubObject.NotSet and ASSIGN_IMMEDIATELY:
             if isinstance(assignee, (str, unicode)):
                 post_parameters["issue"]["assignee"] = assignee
             else:
@@ -237,12 +243,19 @@ class Migrator():
             else:
                 fmt = "".join(values)
             post_parameters["comments"].append({"body": fmt, "created_at": convert_value_for_json(attributes["time"])})
-        headers, data = self.github_repo._requester.requestJsonAndCheck(
-            "POST",
-            self.github_repo.url + "/import/issues",
-            input=post_parameters,
-            headers={'Accept': 'application/vnd.github.golden-comet-preview+json'}
-        )
+        failure = True
+        while failure:
+            try:
+                headers, data = self.github_repo._requester.requestJsonAndCheck(
+                    "POST",
+                    self.github_repo.url + "/import/issues",
+                    input=post_parameters,
+                    headers={'Accept': 'application/vnd.github.golden-comet-preview+json'}
+                )
+                failure = False
+            except ssl.SSLError as e:
+                print("Retrying import due to %s" % e, file=sys.stderr)
+                time.sleep(2)
         return data["id"]
 
     def migrate_tickets(self):
@@ -253,13 +266,10 @@ class Migrator():
         for ticket in self.trac.ticket.query("max=0&order=id"):
             get_all_tickets.ticket.get(ticket)
 
-        # Take the memory hit so we can rewrite ticket references:
-        all_trac_tickets = list(get_all_tickets())
-        all_trac_tickets.sort(key=lambda t: int(t[0]))
-
         print ("Creating GitHub tickets…", file=sys.stderr)
-        for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            title = "%s (Trac #%d)" % (attributes['summary'], trac_id)
+        for trac_id, time_created, time_changed, attributes in sorted(get_all_tickets(), key=lambda t: int(t[0])):
+            # need to keep trac # in title to have unique titles
+            title = "%s (trac #%d)" % (attributes['summary'], trac_id)
 
             body = self.fix_wiki_syntax(attributes['description'])
             body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "/ticket/%d" % trac_id)
@@ -277,14 +287,15 @@ class Migrator():
             for attr in ('type', 'component', 'resolution', 'priority', 'keywords'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
 
-            for i, j in self.gh_issues.items():
-                if i == title:
-                    gh_issue = j
-                    if (assignee is not GithubObject.NotSet and
-                        (not gh_issue.assignee
-                         or (gh_issue.assignee.login != assignee.login))):
-                        gh_issue.edit(assignee=assignee)
-                    break
+            if title in self.gh_issues:
+                gh_issue = self.gh_issues[title]
+                print ("\tIssue exists: %s (%s)" % (title, gh_issue), file=sys.stderr)
+                if (assignee is not GithubObject.NotSet and
+                    (not gh_issue.assignee
+                     or (gh_issue.assignee.login != assignee.login))):
+                    print ("\t\tChanging assignee: %s" % (assignee), file=sys.stderr)
+                    gh_issue.edit(assignee=assignee)
+                continue
             else:
                 gh_issue = self.import_issue(title, assignee, body,
                                              milestone, labels,
@@ -292,11 +303,18 @@ class Migrator():
                 print ("\tInitiated issue: %s (%s)" % (title, gh_issue), file=sys.stderr)
                 self.gh_issues[title] = gh_issue
 
-        print("Checking completion…", file=sys.stderr)
-
-        for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            gh_issue = self.github_repo.get_issue(trac_id)
-            print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url), file=sys.stderr)
+            print("\tChecking completion…", file=sys.stderr)
+            failure = True
+            sleep = 0
+            while failure:
+                try:
+                    gh_issue = self.github_repo.get_issue(trac_id)
+                    print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url), file=sys.stderr)
+                    failure = False
+                except (UnknownObjectException, ssl.SSLError) as e:
+                    sleep += 1
+                    print("\t\tnot completed waiting", e, sleep, file=sys.stderr)
+                    time.sleep(sleep)
 
 
 def check_simple_output(*args, **kwargs):
