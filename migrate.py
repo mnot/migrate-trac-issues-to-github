@@ -197,7 +197,8 @@ class Migrator():
         changelog = self.trac.ticket.changeLog(trac_id)
         comments = {}
         for time, author, field, old_value, new_value, permanent in changelog:
-            author = self.username_map.get(author, author)
+            if author in self.username_map:
+                author = self.username_map[author].login
             if field == 'comment':
                 if not new_value:
                     continue
@@ -288,6 +289,8 @@ class Migrator():
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
 
             if title in self.gh_issues:
+                # the following block needs to be commented out when the script needs to run multiple times
+                # without assigning tickets (which is slow and error prone)
                 gh_issue = self.gh_issues[title]
                 print ("\tIssue exists: %s (%s)" % (title, gh_issue), file=sys.stderr)
                 if (assignee is not GithubObject.NotSet and
