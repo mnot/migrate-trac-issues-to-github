@@ -62,6 +62,9 @@ import xmlrpclib
 import yaml
 import ssl
 import time
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
 
 from github import Github, GithubObject, UnknownObjectException
 
