@@ -98,6 +98,8 @@ def make_blockquote(text):
 class Migrator():
     def __init__(self, trac_url, github_username=None, github_password=None, github_project=None,
                  github_api_url=None, username_map=None, config=None):
+        if trac_url[-1]!='/':
+            trac_url=trac_url+'/'
         trac_api_url = trac_url + "/login/rpc"
         print("TRAC api url: %s" % trac_api_url, file=sys.stderr)
         self.trac = xmlrpclib.ServerProxy(trac_api_url)
@@ -273,7 +275,7 @@ class Migrator():
             title = "%s (trac #%d)" % (attributes['summary'], trac_id)
 
             body = self.fix_wiki_syntax(attributes['description'])
-            body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "/ticket/%d" % trac_id)
+            body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "ticket/%d" % trac_id)
             text_attributes = {k: convert_value_for_json(v) for k, v in attributes.items()}
             body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
 
