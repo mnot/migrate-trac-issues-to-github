@@ -126,6 +126,11 @@ class Migrator():
         return "[%s](../commit/%s)" % (rev_id[:7], rev_id)
 
     def fix_wiki_syntax(self, markup):
+        
+        #also handle option > prefix, e.g. when the trac description was later modified, 
+        #and handle syntax hilighting, e.g. "> {{{#!json " gets converted to  > "```json"
+        markup = re.sub(r"(|> ){{{(|#!)(|[^#!]*)\n", r"\n\1```\3\n", markup)
+        
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
         markup = markup.replace("}}}", "```")
@@ -134,7 +139,7 @@ class Migrator():
         markup = re.sub(r'^ [-\*] ', '* ', markup)
         markup = re.sub(r'\n [-\*] ', '\n* ', markup)
 
-        markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"]', lambda i: self.convert_revision_id(i.group(1)), markup)
+        markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"[^\]]*]', lambda i: self.convert_revision_id(i.group(1)), markup)
         markup = re.sub(r'\[(\d+)\]', lambda i: self.convert_revision_id(i.group(1)), markup)
         return markup
 
@@ -216,8 +221,8 @@ class Migrator():
             else:
                 if "\n" in old_value or "\n" in new_value:
                     body = '@%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (author, field,
-                                                                           make_blockquote(old_value),
-                                                                           make_blockquote(new_value))
+                                                                           make_blockquote(self.fix_wiki_syntax(old_value)),
+                                                                           make_blockquote(self.fix_wiki_syntax(new_value)))
                 else:
                     body = '@%s changed %s from "%s" to "%s"' % (author, field, old_value, new_value)
             comments.setdefault(time.value, []).append(body)
@@ -297,7 +302,7 @@ class Migrator():
                 # the following block needs to be commented out when the script needs to run multiple times
                 # without assigning tickets (which is slow and error prone)
                 gh_issue = self.gh_issues[title]
-                print ("\tIssue exists: %s (%s)" % (title, gh_issue), file=sys.stderr)
+                print ("\tIssue exists: %s" % str(gh_issue).decode('utf-8'), file=sys.stderr)
                 if (assignee is not GithubObject.NotSet and
                     (not gh_issue.assignee
                      or (gh_issue.assignee.login != assignee.login))):
