@@ -281,7 +281,25 @@ class Migrator():
             # need to keep trac # in title to have unique titles
             title = "%s (trac #%d)" % (attributes['summary'], trac_id)
 
-            body = self.fix_wiki_syntax(attributes['description'])
+            r=self.get_github_username(attributes['reporter'])
+            if r ==GithubObject.NotSet:
+                rep=attributes['reporter']
+            else:
+                rep='@'+r.login
+            body ='\nreported by: '+rep
+            
+            newCC=[]
+            for u in attributes['cc'].strip().split(', '):
+                if u:
+                    newU=self.get_github_username(u)
+                    if newU is GithubObject.NotSet:
+                        newCC.append(u)
+                    else:
+                        newCC.append('@'+newU.login)
+            if newCC:
+                body += "\ncc: %s"%' '.join(newCC)
+
+            body += '\n\n'+self.fix_wiki_syntax(attributes['description'])
             body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "ticket/%d" % trac_id)
             text_attributes = {k: convert_value_for_json(v) for k, v in attributes.items()}
             body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
