@@ -98,13 +98,24 @@ def make_blockquote(text):
 
 
 class Migrator():
-    def __init__(self, trac_url, github_username=None, github_password=None, github_project=None,
-                 github_api_url=None, username_map=None, config=None):
+    def __init__(
+            self,
+            trac_url,
+            github_username=None,
+            github_password=None,
+            github_project=None,
+            github_api_url=None,
+            username_map=None,
+            config=None,
+            ssl_verify=False,
+    ):
         if trac_url[-1]!='/':
             trac_url=trac_url+'/'
-        trac_api_url = trac_url + "/login/rpc"
+        trac_api_url = trac_url + "xmlrpc"
         print("TRAC api url: %s" % trac_api_url, file=sys.stderr)
-        self.trac = xmlrpclib.ServerProxy(trac_api_url)
+        # Allow self-signed SSL Certs (idea copied from tracboat)
+        context = None if ssl_verify else ssl._create_unverified_context()
+        self.trac = xmlrpclib.ServerProxy(trac_api_url, context=context)
         self.trac_public_url = sanitize_url(trac_url)
 
         self.github = gh = Github(github_username, github_password, base_url=github_api_url)
