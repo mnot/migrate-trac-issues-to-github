@@ -51,14 +51,14 @@ from __future__ import absolute_import, unicode_literals
 from itertools import chain
 from datetime import datetime
 from getpass import getpass, getuser
-from urlparse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from warnings import warn
 import argparse
 import json
 import re
 import subprocess
 import sys
-import xmlrpclib
+import xmlrpc.client as xmlrpclib
 import yaml
 import ssl
 import time
@@ -348,7 +348,7 @@ class Migrator():
 
 
 def check_simple_output(*args, **kwargs):
-    return "".join(subprocess.check_output(shell=True, *args, **kwargs)).strip()
+    return "".join(subprocess.check_output(*args, shell=True, **kwargs).decode()).strip()
 
 
 def get_github_credentials():
