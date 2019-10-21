@@ -108,7 +108,7 @@ class Migrator():
             username_map=None,
             config=None,
             ssl_verify=False,
-            reassign_existing_issues=True,
+            reassign_existing_issues=False,
             dry_run=False,
     ):
         if trac_url[-1]!='/':
@@ -123,7 +123,13 @@ class Migrator():
         self.github = gh = Github(github_username, github_password, base_url=github_api_url)
         self.github_repo = self.github.get_repo(github_project)
 
-        self.username_map = {i: gh.get_user(j) for i, j in username_map.items()}
+        def get_user_or_null(username):
+            try:
+                return gh.get_user(username)
+            except UnknownObjectException:
+                return username
+            
+        self.username_map = {i: get_user_or_null(j) for i, j in username_map.items()}
         if "labels" in config:
             self.label_map = config["labels"]
         else:
@@ -162,12 +168,12 @@ class Migrator():
         return markup
 
     def get_gh_milestone(self, milestone):
-        if milestone:
+        if milestone and not self.dry_run:
             if milestone not in self.gh_milestones:
                 m = self.trac.ticket.milestone.get(milestone)
                 print("Adding milestone", m, file=sys.stderr)
                 desc = self.fix_wiki_syntax(m["description"])
-                due = datetime.fromtimestamp(time.mktime((m["due"]).timetuple()))
+                # due = datetime.fromtimestamp(time.mktime((m["due"]).timetuple()))
                 status = "closed" if m["completed"] else "open"
                 gh_m = self.github_repo.create_milestone(milestone, state=status, description=desc)#, due_on=due)
                 self.gh_milestones[gh_m.title] = gh_m
@@ -226,7 +232,10 @@ class Migrator():
         comments = {}
         for time, author, field, old_value, new_value, permanent in changelog:
             if author in self.username_map:
-                author = self.username_map[author].login
+                try:
+                    author = self.username_map[author].login
+                except AttributeError:
+                    author = self.username_map[author]
             if field == 'comment':
                 if not new_value:
                     continue
@@ -315,7 +324,11 @@ class Migrator():
             if r ==GithubObject.NotSet:
                 rep=attributes['reporter']
             else:
-                rep='@'+r.login
+                try: 
+                    rep='@'+r.login
+                except:
+                    rep=attributes['reporter']
+
             body ='\nreported by: '+rep
             
             newCC=[]
@@ -352,7 +365,7 @@ class Migrator():
                 # needs to run multiple times without assigning
                 # tickets (which is slow and error prone)
                 gh_issue = self.gh_issues[title]
-                print ("\tIssue exists: %s" % str(gh_issue).decode('utf-8'),
+                print ("\tIssue exists: %s" % str(gh_issue),
                        file=sys.stderr)
                 if self.reassign_existing_issues:
                     if (assignee is not GithubObject.NotSet and
