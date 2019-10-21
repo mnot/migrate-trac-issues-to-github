@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 from __future__ import print_function
+from __future__ import absolute_import, unicode_literals
 
 """Migrate Trac tickets to Github Issues
 
@@ -42,11 +43,10 @@ License
 Requirements
 ============
 
- * Python 2.7
+ * Python 3.7
  * Trac with xmlrpc plugin enabled
  * PyGithub
 """
-from __future__ import absolute_import, unicode_literals
 
 from itertools import chain
 from datetime import datetime
@@ -108,6 +108,8 @@ class Migrator():
             username_map=None,
             config=None,
             ssl_verify=False,
+            reassign_existing_issues=True,
+            dry_run=False,
     ):
         if trac_url[-1]!='/':
             trac_url=trac_url+'/'
@@ -122,13 +124,19 @@ class Migrator():
         self.github_repo = self.github.get_repo(github_project)
 
         self.username_map = {i: gh.get_user(j) for i, j in username_map.items()}
-        self.label_map = config["labels"]
+        if "labels" in config:
+            self.label_map = config["labels"]
+        else:
+            self.label_map = {}
         self.rev_map = {}
         if "github" in config and "revisions" in config["github"]:
             for l in open(config["github"]["revisions"]):
                 key, val = l.split()
                 self.rev_map[key] = val
         self.use_import_api = True
+        # Modify behavior of migrate_tickets()
+        self.reassign_existing_issues = reassign_existing_issues
+        self.dry_run = dry_run
 
     def convert_revision_id(self, rev_id):
         if rev_id in self.rev_map:
@@ -172,9 +180,9 @@ class Migrator():
             self.gh_labels[label.lower()] = self.github_repo.create_label(label, color=color)
         return self.gh_labels[label.lower()]
 
-    def run(self):
+    def run(self, ticket_range=None):
         self.load_github()
-        self.migrate_tickets()
+        self.migrate_tickets(ticket_range)
 
     def load_github(self):
         print("Loading information from Github…", file=sys.stderr)
@@ -279,15 +287,26 @@ class Migrator():
                 time.sleep(2)
         return data["id"]
 
-    def migrate_tickets(self):
+    def migrate_tickets(self, ticket_range=None):
         print("Loading information from Trac…", file=sys.stderr)
 
         get_all_tickets = xmlrpclib.MultiCall(self.trac)
 
-        for ticket in self.trac.ticket.query("max=0&order=id"):
-            get_all_tickets.ticket.get(ticket)
+        ticket_list = self.trac.ticket.query("max=0&order=id")
 
-        print ("Creating GitHub tickets…", file=sys.stderr)
+        # Optional argument ticket_range (2-sequence) can restrict
+        # range of tickets to be processed
+        if ticket_range is None:
+            first_ticket, last_ticket = min(ticket_list), max(ticket_list)
+        else:
+            first_ticket, last_ticket = ticket_range
+            
+        for ticket in ticket_list:
+            # Only get tickets within requested range
+            if first_ticket <= ticket <= last_ticket:
+                get_all_tickets.ticket.get(ticket)
+
+        print (f"Creating GitHub tickets {first_ticket} to {last_ticket} …", file=sys.stderr)
         for trac_id, time_created, time_changed, attributes in sorted(get_all_tickets(), key=lambda t: int(t[0])):
             # need to keep trac # in title to have unique titles
             title = "%s (trac #%d)" % (attributes['summary'], trac_id)
@@ -320,42 +339,60 @@ class Migrator():
 
             labels = []
             # User does not exist in GitHub -> Add username as label
-            if (assignee is GithubObject.NotSet and (attributes['owner'] and attributes['owner'].strip())):
+            if (assignee is GithubObject.NotSet
+                    and (attributes['owner'] and attributes['owner'].strip())
+            ):
                 labels = self.get_mapped_labels('owner', attributes['owner'])
 
             for attr in ('type', 'component', 'resolution', 'priority', 'keywords'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
 
             if title in self.gh_issues:
-                # the following block needs to be commented out when the script needs to run multiple times
-                # without assigning tickets (which is slow and error prone)
+                # Set reassign_existing_issues=False when the script
+                # needs to run multiple times without assigning
+                # tickets (which is slow and error prone)
                 gh_issue = self.gh_issues[title]
-                print ("\tIssue exists: %s" % str(gh_issue).decode('utf-8'), file=sys.stderr)
-                if (assignee is not GithubObject.NotSet and
-                    (not gh_issue.assignee
-                     or (gh_issue.assignee.login != assignee.login))):
-                    print ("\t\tChanging assignee: %s" % (assignee), file=sys.stderr)
-                    gh_issue.edit(assignee=assignee)
+                print ("\tIssue exists: %s" % str(gh_issue).decode('utf-8'),
+                       file=sys.stderr)
+                if self.reassign_existing_issues:
+                    if (assignee is not GithubObject.NotSet and
+                        (not gh_issue.assignee
+                         or (gh_issue.assignee.login != assignee.login))):
+                        print ("\t\tChanging assignee: %s" % (assignee), file=sys.stderr)
+                        gh_issue.edit(assignee=assignee)
                 continue
             else:
-                gh_issue = self.import_issue(title, assignee, body,
-                                             milestone, labels,
-                                             attributes, self.get_trac_comments(trac_id))
-                print ("\tInitiated issue: %s (%s)" % (title, gh_issue), file=sys.stderr)
-                self.gh_issues[title] = gh_issue
+                comments = self.get_trac_comments(trac_id)
+                if self.dry_run:
+                    print(f"\tDry run for issue: {title}", file=sys.stderr)
+                    print(f"\t\tAssignee: {assignee}", file=sys.stderr)
+                    print(f"\t\tBody: {body}", file=sys.stderr)
+                    print(f"\t\tMilestone: {milestone}", file=sys.stderr)
+                    print(f"\t\tLabels: {labels}", file=sys.stderr)
+                    print(f"\t\tComments: {comments}", file=sys.stderr)
+                else:
+                    gh_issue = self.import_issue(
+                        title, assignee, body,
+                        milestone, labels,
+                        attributes, comments)
+                    print ("\tInitiated issue: %s (%s)" % (title, gh_issue),
+                           file=sys.stderr)
+                    self.gh_issues[title] = gh_issue
 
-            print("\tChecking completion…", file=sys.stderr)
-            failure = True
-            sleep = 0
-            while failure:
-                try:
-                    gh_issue = self.github_repo.get_issue(trac_id)
-                    print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url), file=sys.stderr)
-                    failure = False
-                except (UnknownObjectException, ssl.SSLError) as e:
-                    sleep += 1
-                    print("\t\tnot completed waiting", e, sleep, file=sys.stderr)
-                    time.sleep(sleep)
+            if not self.dry_run:
+                print("\tChecking completion…", file=sys.stderr)
+                failure = True
+                sleep = 0
+                while failure:
+                    try:
+                        gh_issue = self.github_repo.get_issue(trac_id)
+                        print("\t%s (%s)" % (gh_issue.title, gh_issue.html_url),
+                              file=sys.stderr)
+                        failure = False
+                    except (UnknownObjectException, ssl.SSLError) as e:
+                        sleep += 1
+                        print("\t\tnot completed waiting", e, sleep, file=sys.stderr)
+                        time.sleep(sleep)
 
 
 def check_simple_output(*args, **kwargs):
@@ -419,10 +456,23 @@ if __name__ == "__main__":
                         type=argparse.FileType('r'),
                         help="YAML configuration file in trac-hub style")
 
+    parser.add_argument("--ssl-verify",
+                        action="store_true",
+                        help="Do SSL properly")
+
+    parser.add_argument("--dry-run",
+                        action="store_true",
+                        help="Do not actually import any issues into GitHub")
+    parser.add_argument("--ticket-range",
+                        nargs=2,
+                        type=int,
+                        default=[None, None],
+                        help="First and last ticket IDs to process")
+
     args = parser.parse_args()
 
     if args.trac_hub_config:
-        config = yaml.load(args.trac_hub_config)
+        config = yaml.load(args.trac_hub_config, Loader=yaml.SafeLoader)
         if "github" in config:
             if not args.github_project and "repo" in config["github"]:
                 args.github_project = config["github"]["repo"]
@@ -454,10 +504,18 @@ if __name__ == "__main__":
         user_map = {}
 
     try:
-        m = Migrator(trac_url=trac_url, github_username=args.github_username, github_password=github_password,
-                     github_api_url=args.github_api_url, github_project=args.github_project,
-                     username_map=user_map, config=config)
-        m.run()
+        m = Migrator(
+            trac_url=trac_url,
+            github_username=args.github_username,
+            github_password=github_password,
+            github_api_url=args.github_api_url,
+            github_project=args.github_project,
+            username_map=user_map,
+            config=config,
+            ssl_verify=args.ssl_verify,
+            dry_run=args.dry_run,
+        )
+        m.run(ticket_range=args.ticket_range)
     except Exception as e:
         print("Exception: %s" % e, file=sys.stderr)
 
