@@ -64,6 +64,7 @@ import ssl
 import time
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
+from pathlib import Path
 
 from github import Github, GithubObject, UnknownObjectException
 
@@ -110,6 +111,9 @@ class Migrator():
             ssl_verify=False,
             reassign_existing_issues=False,
             dry_run=False,
+            get_attachments=False,
+            attachments_local_path=None,
+            attachments_github_repo=None,
     ):
         if trac_url[-1]!='/':
             trac_url=trac_url+'/'
@@ -255,6 +259,23 @@ class Migrator():
             comments.setdefault(time.value, []).append(body)
         return comments
 
+    def get_trac_attachments(self, trac_id):
+        attachment_list = self.trac.listAttachments(trac_id)
+        comments = {}
+        if attachment_list:
+            # These are the variable names given in the tracrpc source
+            for filename, description, size, time, author in attachment_list:
+                 data = self.trac.getAttachment(trac_id, filename)
+                 filename_path = self.attachments_local_path / "tickets" / f"{trac_id:.5d}" / filename
+                 filename_path.parent.mkdir(parents=True, exist_ok=True)
+                 with open(filename_path, "wb") as f:
+                     f.write(data.data)
+                     # https://github.com/will-henney/migrate-trac-issues-to-github/blob/master/config.yaml
+                 description += "\n" + f"Attachment: [{filename}]('https://github.com/{self.attachments_github_repo}/blob/master/tickets/{trac_id:.5d}/{filename}')"
+                 comments.setdefault(time.value, []).append(description)
+        return comments
+    
+                 
     def import_issue(self, title, assignee, body, milestone, labels, attributes, comments):
         post_parameters = {
             "issue": {
@@ -476,11 +497,25 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run",
                         action="store_true",
                         help="Do not actually import any issues into GitHub")
+
     parser.add_argument("--ticket-range",
                         nargs=2,
                         type=int,
                         default=[None, None],
                         help="First and last ticket IDs to process")
+
+    parser.add_argument("--get-attachments",
+                        action="store_true",
+                        help="Download attachments and add link to issues")
+
+    parser.add_argument('--attachments-local-path',
+                        action="store",
+                        default="."
+                        help="File attachments are saved to this local path in subfolder tickets/NNN/")
+
+    parser.add_argument('--attachments-github-repo',
+                        action="store",
+                        help="Github repo where file attachments are stored")
 
     args = parser.parse_args()
 
@@ -527,6 +562,9 @@ if __name__ == "__main__":
             config=config,
             ssl_verify=args.ssl_verify,
             dry_run=args.dry_run,
+            get_attachments=args.get_attachments,
+            attachments_local_path=Path(args.attachments_path),
+            attachments_github_repo=args.attachments_github_repo,
         )
         m.run(ticket_range=args.ticket_range)
     except Exception as e:
