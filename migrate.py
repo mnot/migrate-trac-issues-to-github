@@ -73,6 +73,15 @@ from github import Github, GithubObject, UnknownObjectException
 # when setting the variable to true, no second run is needed
 ASSIGN_IMMEDIATELY = False
 
+# This is for making the attachment links be to the raw file
+ATTACHMENTS_GITHUB_SITE = "https://raw.githubusercontent.com"
+ATTACHMENTS_GITHUB_PATH = "master"
+
+# Alternativel settings for if you want your attachments to be displayed
+# in the context of the repo where they are stored
+# ATTACHMENTS_GITHUB_SITE = "https://github.com"
+# ATTACHMENTS_GITHUB_PREFIX = "blob/master"
+
 def convert_value_for_json(obj):
     """Converts all date-like objects into ISO 8601 formatted strings for JSON"""
 
@@ -108,10 +117,10 @@ class Migrator():
             github_api_url=None,
             username_map=None,
             config=None,
-            ssl_verify=False,
-            reassign_existing_issues=False,
-            dry_run=False,
-            get_attachments=False,
+            should_verify_ssl=False,
+            should_reassign_existing_issues=False,
+            is_dry_run=False,
+            should_import_attachments=False,
             attachments_local_path=None,
             attachments_github_repo=None,
     ):
@@ -120,7 +129,7 @@ class Migrator():
         trac_api_url = trac_url + "xmlrpc"
         print("TRAC api url: %s" % trac_api_url, file=sys.stderr)
         # Allow self-signed SSL Certs (idea copied from tracboat)
-        context = None if ssl_verify else ssl._create_unverified_context()
+        context = None if should_verify_ssl else ssl._create_unverified_context()
         self.trac = xmlrpclib.ServerProxy(trac_api_url, context=context)
         self.trac_public_url = sanitize_url(trac_url)
 
@@ -145,9 +154,13 @@ class Migrator():
                 self.rev_map[key] = val
         self.use_import_api = True
         # Modify behavior of migrate_tickets()
-        self.reassign_existing_issues = reassign_existing_issues
-        self.dry_run = dry_run
+        self.should_reassign_existing_issues = should_reassign_existing_issues
+        self.is_dry_run = is_dry_run
+        self.should_import_attachments = should_import_attachments
+        self.attachments_local_path = Path(attachments_local_path)
+        self.attachments_github_repo = attachments_github_repo
 
+        
     def convert_revision_id(self, rev_id):
         if rev_id in self.rev_map:
             return "[%s](../commit/%s) (aka r%s)" % (self.rev_map[rev_id][:7], self.rev_map[rev_id], rev_id)
@@ -172,7 +185,7 @@ class Migrator():
         return markup
 
     def get_gh_milestone(self, milestone):
-        if milestone and not self.dry_run:
+        if milestone and not self.is_dry_run:
             if milestone not in self.gh_milestones:
                 m = self.trac.ticket.milestone.get(milestone)
                 print("Adding milestone", m, file=sys.stderr)
@@ -259,19 +272,46 @@ class Migrator():
             comments.setdefault(time.value, []).append(body)
         return comments
 
-    def get_trac_attachments(self, trac_id):
-        attachment_list = self.trac.listAttachments(trac_id)
+    def get_trac_attachments_as_comments(self, trac_id):
+        """Return comments for each attachment and store data as files
+
+        For all the attachments to a given ticket, do two things.
+        First, save the attachment data with the correct filenames in
+        the 'tickets/NNNNN/' subdirectory of
+        `self.attachments_local_path`, where NNNNN is zero-padded
+        `trac_id` (only save to the file if it does not already
+        exist).  Second, return a dict of comments containing links to
+        the attachment files in the GitHub repo
+        `self.attachments_github_repo`, which should be configured as
+        a git remote for `self.attachments_local_path` (the user is
+        responsible for git-pushing the saved attachment data to
+        GitHub).  The returned dict of comments is keyed on
+        modification time and is designed to be merged with the
+        results of `get_trac_comments`
+        """
+        attachment_list = self.trac.ticket.listAttachments(trac_id)
         comments = {}
         if attachment_list:
-            # These are the variable names given in the tracrpc source
             for filename, description, size, time, author in attachment_list:
-                 data = self.trac.getAttachment(trac_id, filename)
-                 filename_path = self.attachments_local_path / "tickets" / f"{trac_id:.5d}" / filename
+                # The above are the variable names given in the tracrpc source
+                 data = self.trac.ticket.getAttachment(trac_id, filename)
+                 filename_path = (self.attachments_local_path
+                                  / "tickets" / f"{trac_id:05d}" / filename)
                  filename_path.parent.mkdir(parents=True, exist_ok=True)
-                 with open(filename_path, "wb") as f:
-                     f.write(data.data)
-                     # https://github.com/will-henney/migrate-trac-issues-to-github/blob/master/config.yaml
-                 description += "\n" + f"Attachment: [{filename}]('https://github.com/{self.attachments_github_repo}/blob/master/tickets/{trac_id:.5d}/{filename}')"
+                 # Only write data to file if it does not already
+                 # exist. If you want to rewrite it, you should delete
+                 # the file on disk first
+                 if not filename_path.exists():
+                     with open(filename_path, "wb") as f:
+                         f.write(data.data)
+                 url = "/".join([
+                     ATTACHMENTS_GITHUB_SITE,
+                     self.attachments_github_repo,
+                     ATTACHMENTS_GITHUB_PATH,
+                     f"tickets/{trac_id:05d}",
+                     filename,
+                 ])
+                 description += "\n" + f"Attachment: [{filename}]({url})"
                  comments.setdefault(time.value, []).append(description)
         return comments
     
@@ -381,14 +421,14 @@ class Migrator():
             for attr in ('type', 'component', 'resolution', 'priority', 'keywords'):
                 labels += self.get_mapped_labels(attr, attributes.get(attr))
 
-            if title in self.gh_issues:
-                # Set reassign_existing_issues=False when the script
+            if title in self.gh_issues and not self.is_dry_run:
+                # Set should_reassign_existing_issues=False when the script
                 # needs to run multiple times without assigning
                 # tickets (which is slow and error prone)
                 gh_issue = self.gh_issues[title]
                 print ("\tIssue exists: %s" % str(gh_issue),
                        file=sys.stderr)
-                if self.reassign_existing_issues:
+                if self.should_reassign_existing_issues:
                     if (assignee is not GithubObject.NotSet and
                         (not gh_issue.assignee
                          or (gh_issue.assignee.login != assignee.login))):
@@ -397,7 +437,13 @@ class Migrator():
                 continue
             else:
                 comments = self.get_trac_comments(trac_id)
-                if self.dry_run:
+                if self.should_import_attachments:
+                    # This will overwrite any comment that has the
+                    # same timestamp as an attachment, but those
+                    # should all be "changed attachment" edits so that
+                    # is OK I think
+                    comments.update(self.get_trac_attachments_as_comments(trac_id))
+                if self.is_dry_run:
                     print(f"\tDry run for issue: {title}", file=sys.stderr)
                     print(f"\t\tAssignee: {assignee}", file=sys.stderr)
                     print(f"\t\tBody: {body}", file=sys.stderr)
@@ -413,7 +459,7 @@ class Migrator():
                            file=sys.stderr)
                     self.gh_issues[title] = gh_issue
 
-            if not self.dry_run:
+            if not self.is_dry_run:
                 print("\tChecking completion…", file=sys.stderr)
                 failure = True
                 sleep = 0
@@ -504,13 +550,13 @@ if __name__ == "__main__":
                         default=[None, None],
                         help="First and last ticket IDs to process")
 
-    parser.add_argument("--get-attachments",
+    parser.add_argument("--import-attachments",
                         action="store_true",
                         help="Download attachments and add link to issues")
 
     parser.add_argument('--attachments-local-path',
                         action="store",
-                        default="."
+                        default=".",
                         help="File attachments are saved to this local path in subfolder tickets/NNN/")
 
     parser.add_argument('--attachments-github-repo',
@@ -560,10 +606,10 @@ if __name__ == "__main__":
             github_project=args.github_project,
             username_map=user_map,
             config=config,
-            ssl_verify=args.ssl_verify,
-            dry_run=args.dry_run,
-            get_attachments=args.get_attachments,
-            attachments_local_path=Path(args.attachments_path),
+            should_verify_ssl=args.ssl_verify,
+            is_dry_run=args.dry_run,
+            should_import_attachments=args.import_attachments,
+            attachments_local_path=args.attachments_local_path,
             attachments_github_repo=args.attachments_github_repo,
         )
         m.run(ticket_range=args.ticket_range)
