@@ -474,7 +474,7 @@ class Migrator:
             text_attributes = {
                 k: convert_value_for_json(v) for k, v in list(attributes.items())
             }
-            body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
+            # body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
 
             milestone = self.get_gh_milestone(attributes["milestone"])
             assignee = self.get_github_username(attributes["owner"])
