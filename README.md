@@ -15,12 +15,16 @@ This script migrates issues from Trac to Github:
 Run migrate.py with --help for more information
 
 Requirements:
- * Python 2.7
-* PyGithub: https://pypi.python.org/pypi/PyGithub
+
+* Python 3.6
+* [PyGithub](https://pypi.python.org/pypi/PyGithub)
+ 
 ```
 pip install PyGithub
 ```
+
  * Currently, you must add the GH credentials to the git config:
+
 ```
 git config --global github.username myusername
 git config --global github.password <your_github_token>
