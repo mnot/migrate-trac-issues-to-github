@@ -223,9 +223,10 @@ class Migrator:
             return GithubObject.NotSet
 
     def get_gh_label(self, label, color):
+        label = label[:MAX_LABEL_LEN]
         if label.lower() not in self.gh_labels:
             self.gh_labels[label.lower()] = self.github_repo.create_label(
-                label[:MAX_LABEL_LEN], color=color
+                label, color=color
             )
         return self.gh_labels[label.lower()]
 
