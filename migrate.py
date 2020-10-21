@@ -181,7 +181,7 @@ class Migrator:
 
         # also handle option > prefix, e.g. when the trac description was later modified,
         # and handle syntax hilighting, e.g. "> {{{#!json " gets converted to  > "```json"
-        markup = re.sub(r"(|> ){{{(|#!)(|[^#!]*)\n", r"\n\1```\3\n", markup)
+        # markup = re.sub(r"(|> ){{{(|#!)(|[^#!]*)\n", r"\n\1```\3\n", markup)
 
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
