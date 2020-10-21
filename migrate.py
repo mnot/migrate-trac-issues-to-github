@@ -130,7 +130,7 @@ class Migrator:
     ):
         if trac_url[-1] != "/":
             trac_url = trac_url + "/"
-        trac_api_url = trac_url + "xmlrpc"
+        trac_api_url = trac_url + "login/rpc"
         print("TRAC api url: %s" % trac_api_url, file=sys.stderr)
         # Allow self-signed SSL Certs (idea copied from tracboat)
         context = None if should_verify_ssl else ssl._create_unverified_context()
