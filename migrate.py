@@ -292,26 +292,33 @@ class Migrator:
                     continue
                 if "#!CommitTicketReference" in new_value:
                     lines = new_value.splitlines()
-                    body = "@%s committed %s\n%s" % (
+                    body = "%s committed %s\n%s" % (
                         author,
                         self.fix_wiki_syntax(lines[0][3:]),
                         lines[3],
                     )
                 else:
-                    body = "@%s commented:\n\n%s\n\n" % (
+                    body = "%s commented:\n\n%s\n\n" % (
                         author,
                         make_blockquote(self.fix_wiki_syntax(new_value)),
                     )
             else:
                 if "\n" in old_value or "\n" in new_value:
-                    body = "@%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n" % (
+                    body = "%s changed %s from:\n\n%s\n\nto:\n\n%s\n\n" % (
                         author,
                         field,
                         make_blockquote(self.fix_wiki_syntax(old_value)),
                         make_blockquote(self.fix_wiki_syntax(new_value)),
                     )
+                elif old_value == "":
+                    if new_value:
+                        body = '%s changed %s to `%s`' % (
+                            author,
+                            field,
+                            new_value,
+                        )
                 else:
-                    body = '@%s changed %s from "%s" to "%s"' % (
+                    body = '%s changed %s from `%s` to `%s`' % (
                         author,
                         field,
                         old_value,
@@ -454,7 +461,7 @@ class Migrator:
                 except:
                     rep = attributes["reporter"]
 
-            body = "\nreported by: " + rep
+            body = "\n_reported by: " + rep + "_"
 
             newCC = []
             for u in attributes["cc"].strip().split(", "):
