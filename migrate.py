@@ -443,7 +443,7 @@ class Migrator:
             get_all_tickets(), key=lambda t: int(t[0])
         ):
             # need to keep trac # in title to have unique titles
-            title = "%s (trac #%d)" % (attributes["summary"], trac_id)
+            title = attributes["summary"]
 
             r = self.get_github_username(attributes["reporter"])
             if r == GithubObject.NotSet:
