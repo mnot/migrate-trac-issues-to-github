@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # encoding: utf-8
-from __future__ import print_function
+
 
 """Check labels of Github Issues
 
@@ -29,7 +29,7 @@ Requirements
  * Python 2.7
  * PyGithub
 """
-from __future__ import absolute_import, unicode_literals
+
 
 from itertools import chain
 from getpass import getpass, getuser
@@ -83,7 +83,7 @@ if __name__ == "__main__":
         print(i.title, [l.name for l in i.labels])
         for l in i.labels:
             usage[l.name] += 1
-    for l, u in usage.items():
+    for l, u in list(usage.items()):
         if u < 3:
             print("deleting", l, gh_labels[l])
 #            gh_labels[l].delete()

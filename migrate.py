@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
-from __future__ import print_function
-from __future__ import absolute_import, unicode_literals
+
+
 
 """Migrate Trac tickets to Github Issues
 
@@ -142,7 +142,7 @@ class Migrator():
             except UnknownObjectException:
                 return username
             
-        self.username_map = {i: get_user_or_null(j) for i, j in username_map.items()}
+        self.username_map = {i: get_user_or_null(j) for i, j in list(username_map.items())}
         if "labels" in config:
             self.label_map = config["labels"]
         else:
@@ -326,7 +326,7 @@ class Migrator():
             "comments": []
         }
         if assignee is not GithubObject.NotSet and ASSIGN_IMMEDIATELY:
-            if isinstance(assignee, (str, unicode)):
+            if isinstance(assignee, str):
                 post_parameters["issue"]["assignee"] = assignee
             else:
                 post_parameters["issue"]["assignee"] = assignee._identity
@@ -405,7 +405,7 @@ class Migrator():
 
             body += '\n\n'+self.fix_wiki_syntax(attributes['description'])
             body += "\n\nMigrated from %s\n" % urljoin(self.trac_public_url, "ticket/%d" % trac_id)
-            text_attributes = {k: convert_value_for_json(v) for k, v in attributes.items()}
+            text_attributes = {k: convert_value_for_json(v) for k, v in list(attributes.items())}
             body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
 
             milestone = self.get_gh_milestone(attributes['milestone'])
@@ -589,7 +589,7 @@ if __name__ == "__main__":
         import pdb
 
     if args.username_map:
-        user_map = filter(None, (i.strip() for i in args.username_map.readlines()))
+        user_map = [_f for _f in (i.strip() for i in args.username_map.readlines()) if _f]
         user_map = [re.split("\s+", j, maxsplit=1) for j in user_map]
         user_map = dict(user_map)
     elif "users" in config:
