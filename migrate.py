@@ -77,6 +77,9 @@ ASSIGN_IMMEDIATELY = False
 ATTACHMENTS_GITHUB_SITE = "https://raw.githubusercontent.com"
 ATTACHMENTS_GITHUB_PATH = "master"
 
+# Github has a maximum label length
+MAX_LABEL_LEN = 50
+
 # Alternativel settings for if you want your attachments to be displayed
 # in the context of the repo where they are stored
 # ATTACHMENTS_GITHUB_SITE = "https://github.com"
@@ -200,7 +203,7 @@ class Migrator():
 
     def get_gh_label(self, label, color):
         if label.lower() not in self.gh_labels:
-            self.gh_labels[label.lower()] = self.github_repo.create_label(label, color=color)
+            self.gh_labels[label.lower()] = self.github_repo.create_label(label[:MAX_LABEL_LEN], color=color)
         return self.gh_labels[label.lower()]
 
     def run(self, ticket_range=None):
