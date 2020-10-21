@@ -178,10 +178,15 @@ class Migrator:
         return "[%s](../commit/%s)" % (rev_id[:7], rev_id)
 
     def fix_wiki_syntax(self, markup):
+        
+        # Special case for html header
+        if re.match(r"^\s*{{{\n?#!html\n\s*", markup):
+            markup = re.sub(r"^\s*{{{\n?#!html\n\s*", r"", markup)
+            markup = re.sub(r"}}}\s*$", r"", markup)
 
         # also handle option > prefix, e.g. when the trac description was later modified,
         # and handle syntax hilighting, e.g. "> {{{#!json " gets converted to  > "```json"
-        # markup = re.sub(r"(|> ){{{(|#!)(|[^#!]*)\n", r"\n\1```\3\n", markup)
+        markup = re.sub(r"(|> ){{{(|#!)(|[^#!]*)\n", r"\n\1```\3\n", markup)
 
         markup = markup.replace("{{{\n", "\n```text\n")
         markup = markup.replace("{{{", "```")
@@ -281,10 +286,15 @@ class Migrator:
     def get_trac_comments(self, trac_id):
         changelog = self.trac.ticket.changeLog(trac_id)
         comments = {}
-        for time, author, field, old_value, new_value, permanent in changelog:
+        last_entry = None
+        for entry in changelog:
+            if entry == last_entry:
+                continue
+            last_entry = entry
+            time, author, field, old_value, new_value, permanent = entry
             if author in self.username_map:
                 try:
-                    author = self.username_map[author].login
+                    author = '@' + self.username_map[author].login
                 except AttributeError:
                     author = self.username_map[author]
             if field == "comment":
@@ -317,6 +327,8 @@ class Migrator:
                             field,
                             new_value,
                         )
+                    else:
+                        continue
                 else:
                     body = '%s changed %s from `%s` to `%s`' % (
                         author,
@@ -432,7 +444,7 @@ class Migrator:
 
         # Optional argument ticket_range (2-sequence) can restrict
         # range of tickets to be processed
-        if ticket_range is None:
+        if ticket_range is None or ticket_range[0] is None or ticket_range[1] is None:
             first_ticket, last_ticket = min(ticket_list), max(ticket_list)
         else:
             first_ticket, last_ticket = ticket_range
@@ -461,7 +473,8 @@ class Migrator:
                 except:
                     rep = attributes["reporter"]
 
-            body = "\n_reported by: " + rep + "_"
+            body = self.fix_wiki_syntax(attributes["description"])
+            body += "\n\n"
 
             newCC = []
             for u in attributes["cc"].strip().split(", "):
@@ -472,16 +485,16 @@ class Migrator:
                     else:
                         newCC.append("@" + newU.login)
             if newCC:
-                body += "\ncc: %s" % " ".join(newCC)
+                body += "_cc: %s_\n" % " ".join(newCC)
 
-            body += "\n\n" + self.fix_wiki_syntax(attributes["description"])
-            body += "\n\nMigrated from %s\n" % urljoin(
-                self.trac_public_url, "ticket/%d" % trac_id
+            body += "\n\n"
+            body += "_Reported by " + rep + ", migrated from %s\n" % urljoin(
+                self.trac_public_url, "ticket/%d" % trac_id + "_"
             )
-            text_attributes = {
-                k: convert_value_for_json(v) for k, v in list(attributes.items())
-            }
-            # body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
+            #text_attributes = {
+            #    k: convert_value_for_json(v) for k, v in list(attributes.items())
+            #}
+            #body += "```json\n" + json.dumps(text_attributes, indent=4) + "\n```\n"
 
             milestone = self.get_gh_milestone(attributes["milestone"])
             assignee = self.get_github_username(attributes["owner"])
