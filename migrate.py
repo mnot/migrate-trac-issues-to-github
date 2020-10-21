@@ -133,7 +133,7 @@ class Migrator():
         self.trac = xmlrpclib.ServerProxy(trac_api_url, context=context)
         self.trac_public_url = sanitize_url(trac_url)
 
-        self.github = gh = Github(github_username, github_password, base_url=github_api_url)
+        self.github = gh = Github(github_username, github_password, base_url=github_api_url, retry=2)
         self.github_repo = self.github.get_repo(github_project)
 
         def get_user_or_null(username):
